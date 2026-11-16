@@ -64,6 +64,16 @@ class Propagator:
             "news_report": "",
         }
 
+    @staticmethod
+    def tag_run_date(args: dict[str, Any], trade_date) -> dict[str, Any]:
+        """Tag a run's model calls with its date, as ``trade_date`` run metadata.
+
+        A provider that cannot keep the machine's real date from its model
+        (claude_code) tells the model this date is today instead.
+        """
+        args.setdefault("config", {}).setdefault("metadata", {})["trade_date"] = str(trade_date)
+        return args
+
     def get_graph_args(self, callbacks: list | None = None) -> dict[str, Any]:
         """Get arguments for the graph invocation.
 
