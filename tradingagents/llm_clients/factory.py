@@ -45,6 +45,10 @@ def create_llm_client(
         from .azure_client import AzureOpenAIClient
         return AzureOpenAIClient(model, base_url, **kwargs)
 
+    if provider_lower == "claude_code":
+        from .claude_code_client import ClaudeCodeClient
+        return ClaudeCodeClient(model, base_url, **kwargs)
+
     if provider_lower == "bedrock":
         from .bedrock_client import BedrockClient
         return BedrockClient(model, base_url, **kwargs)
@@ -106,7 +110,7 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
 
-    elif provider == "anthropic":
+    elif provider in ("anthropic", "claude_code"):
         effort = config.get("anthropic_effort")
         if effort:
             kwargs["effort"] = effort

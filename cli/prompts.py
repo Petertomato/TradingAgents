@@ -389,6 +389,7 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
         ("Google", "google", None),
         ("Anthropic", "anthropic", "https://api.anthropic.com/"),
         ("ChatGPT (Plus or Pro plan)", "chatgpt", "https://api.openai.com/v1"),
+        ("Claude (Pro or Max plan, through Claude Code)", "claude_code", None),
         ("xAI", "xai", "https://api.x.ai/v1"),
         ("DeepSeek", "deepseek", "https://api.deepseek.com"),
         ("Qwen", "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
@@ -447,6 +448,9 @@ def prompt_openai_compatible_url(default=None) -> str:
 
 # The menu entry that groups the providers used through a personal plan.
 _SUBSCRIPTION = ("subscription", None)
+# Providers used through a personal plan: those TradingAgents signs in to
+# itself, and Claude, which runs on Claude Code's own sign-in.
+PLAN_PROVIDERS = (*SIGNED_IN_PROVIDERS, "claude_code")
 
 
 def select_llm_provider(default=None) -> tuple[str, str | None]:
@@ -457,12 +461,12 @@ def select_llm_provider(default=None) -> tuple[str, str | None]:
     base = (default or "").split("-cn")[0]
     choices = []
     for display, provider_key, url in PROVIDERS:
-        if provider_key in SIGNED_IN_PROVIDERS:
+        if provider_key in PLAN_PROVIDERS:
             continue
         choices.append(questionary.Choice(display, value=(provider_key, url)))
         if provider_key == "anthropic":
-            choices.append(questionary.Choice("Subscription (use your ChatGPT plan)", value=_SUBSCRIPTION))
-    preselected = _SUBSCRIPTION if base in SIGNED_IN_PROVIDERS else next(
+            choices.append(questionary.Choice("Subscription (use your ChatGPT or Claude plan)", value=_SUBSCRIPTION))
+    preselected = _SUBSCRIPTION if base in PLAN_PROVIDERS else next(
         ((key, url) for _, key, url in PROVIDERS if key == base), None
     )
 
@@ -479,10 +483,13 @@ def select_llm_provider(default=None) -> tuple[str, str | None]:
         exit(1)
 
     if choice == _SUBSCRIPTION:
+        plans = [(key, url) for _, key, url in PROVIDERS if key in PLAN_PROVIDERS]
         choice = questionary.select(
             "Select your subscription:",
             choices=[questionary.Choice(display, value=(key, url))
-                     for display, key, url in PROVIDERS if key in SIGNED_IN_PROVIDERS],
+                     for display, key, url in PROVIDERS if key in PLAN_PROVIDERS],
+            # A returning user's plan, so Enter keeps it.
+            default=next((plan for plan in plans if plan[0] == base), None),
             style=_MENU_STYLE,
         ).ask()
         if choice is None:
@@ -668,6 +675,9 @@ def ensure_signed_in(provider: str) -> None:
 
     Signing in runs as its own process (``tradingagents login chatgpt``), so its
     read of a pasted address ends with it and never takes a later answer."""
+    if provider.lower() == "claude_code":
+        _ensure_claude_code_signed_in()
+        return
     if provider.lower() not in SIGNED_IN_PROVIDERS:
         return
     from tradingagents.llm_clients import chatgpt_auth  # the one signed-in provider
@@ -687,6 +697,46 @@ def ensure_signed_in(provider: str) -> None:
         if subprocess.run(login).returncode != 0:
             raise typer.Exit(code=1) from None
     console.print(f"[green]✓ Using your ChatGPT plan:[/green] {escape(chatgpt_auth.signed_in_as() or '')}")
+
+
+def _ensure_claude_code_signed_in() -> None:
+    """Make sure Claude Code is installed and signed in with a Claude plan, offering `claude auth login`.
+
+    A Claude Code signed in to an Anthropic API account would bill that account
+    for every call, so the run stops instead."""
+    from tradingagents.llm_clients import claude_code_client as cc
+
+    def status_or_exit(binary):
+        try:
+            return cc.sign_in_status(binary)
+        except cc.ClaudeCodeError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]")
+            raise typer.Exit(code=1) from None
+
+    try:
+        binary = cc.claude_binary()
+    except cc.ClaudeCodeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1) from None
+    status = status_or_exit(binary)
+    if not status.get("loggedIn"):
+        message = ("Claude Code is not signed in. Sign in with your Claude Pro or Max plan: "
+                   "`claude auth login`, or on a machine with no browser, `claude setup-token` "
+                   "and export CLAUDE_CODE_OAUTH_TOKEN.")
+        if not sys.stdin.isatty():
+            console.print(f"[red]{escape(message)}[/red]")
+            raise typer.Exit(code=1)
+        console.print(f"\n[yellow]{escape(message)}[/yellow]")
+        if subprocess.run([binary, "auth", "login", "--claudeai"]).returncode != 0:
+            raise typer.Exit(code=1)
+        status = status_or_exit(binary)
+    problem = cc.plan_problem(status)
+    if problem:
+        console.print(f"[red]{escape(problem)}[/red]")
+        raise typer.Exit(code=1)
+    plan = status.get("subscriptionType")
+    who = " ".join(str(p) for p in (status.get("email"), f"({plan})" if plan else None) if p)
+    console.print(f"[green]✓ Using your Claude plan through Claude Code:[/green] {escape(who or 'signed in')}")
 
 
 def ensure_api_key(provider: str) -> str | None:
